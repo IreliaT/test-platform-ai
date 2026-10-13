@@ -1,0 +1,93 @@
+# springdoc-openapi 生成的接口文档示例（HapiTest 导入演示，OpenAPI 3.0 + YAML 子集）
+openapi: 3.0.1
+info:
+  title: Pet Store
+  version: 1.2.3
+  description: |
+    宠物商店示例接口。
+    由 springdoc-openapi 生成。
+servers:
+  - url: https://api.example.com/v1
+    description: 生产环境
+tags:
+  - name: pets
+    description: 宠物相关接口
+paths:
+  /pets/{petId}:
+    parameters:
+      - name: petId
+        in: path
+        required: true
+        description: 宠物 ID
+        schema: {type: integer, format: int64, example: 7}
+      - name: X-Trace
+        in: header
+        schema: {type: string, default: trace-1}
+    get:
+      tags: [pets]
+      summary: 查询宠物
+      operationId: getPet
+      parameters:
+        - name: verbose
+          in: query
+          schema: {type: boolean, default: true}
+        - name: X-Trace
+          in: header
+          schema: {type: string, default: override}
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+  /pets:
+    post:
+      tags: [pets]
+      summary: 创建宠物
+      requestBody:
+        required: true
+        content:
+          application/xml:
+            schema: {type: string}
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewPet'
+      responses:
+        "201":
+          description: 已创建
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+  /old:
+    get:
+      deprecated: true
+      responses:
+        "200":
+          description: ok
+components:
+  schemas:
+    Pet:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: integer, format: int64, example: 1}
+        name: {type: string}
+        tag: {type: string}
+    Base:
+      type: object
+      required: [kind, createdAt]
+      properties:
+        kind: {type: string, example: dog}
+        createdAt: {type: string, format: date-time, readOnly: true}
+    NewPet:
+      allOf:
+        - $ref: '#/components/schemas/Base'
+        - type: object
+          required: [name, password]
+          properties:
+            name: {type: string, example: 汪汪}
+            age: {type: integer, default: 3}
+            nickname: {type: string}
+            password: {type: string, example: s3cr3t}

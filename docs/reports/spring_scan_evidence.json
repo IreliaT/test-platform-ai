@@ -1,0 +1,18 @@
+{
+  "source_repo": "../hapi-mamu-v2",
+  "parsed_endpoints": 878,
+  "unique_endpoints": 870,
+  "cases": 858,
+  "by_method": {
+    "GET": 777,
+    "POST": 93
+  },
+  "with_path_params": 15,
+  "with_body": 128,
+  "with_query": 666,
+  "controllers": 213,
+  "warnings": 438,
+  "duration_seconds": 13.84,
+  "verified_at": "2026-10-10",
+  "command": "python3 -m hapitest --data-dir /tmp/ht-scan3 import --project mamu --scan ../hapi-mamu-v2"
+}

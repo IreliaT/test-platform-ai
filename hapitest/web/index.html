@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="description" content="HapiTest 接口自动化测试平台 Web 控制台" />
+  <title>HapiTest 控制台</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
+  <link rel="stylesheet" href="/assets/styles.css" />
+  <script>
+    // 首屏前应用已保存的主题，避免"先白后黑"的闪烁
+    (function () {
+      try {
+        var fromQuery = new URLSearchParams(location.search).get('theme');
+        var saved = fromQuery || localStorage.getItem('hapitest.theme');
+        if (saved) document.documentElement.setAttribute('data-theme', saved);
+      } catch (err) { /* 隐私模式下 localStorage 不可用，忽略 */ }
+    })();
+  </script>
+  <script type="module" src="/assets/app.js"></script>
+</head>
+<body>
+  <button type="button" class="skip-link" id="skip-link">跳到主内容</button>
+
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="#/projects">
+        <img class="brand-mark" src="/assets/favicon.svg" alt="" width="22" height="22" />
+        <span class="brand-name">HapiTest</span>
+        <span class="brand-sub">接口自动化测试平台</span>
+      </a>
+      <div class="topbar-project" id="project-switcher"></div>
+      <div class="topbar-env" id="env-switcher"></div>
+      <div class="topbar-actions">
+        <div class="theme-switch" id="theme-switcher"></div>
+        <span class="loading-indicator" id="global-loading" role="status" aria-live="polite" hidden>
+          <span class="spinner" aria-hidden="true"></span>加载中…
+        </span>
+        <button type="button" class="btn btn-ghost btn-icon" id="refresh-button" aria-label="刷新当前视图" title="刷新当前视图">
+          <svg class="icon" aria-hidden="true" focusable="false"><use href="/assets/icons.svg#i-refresh"></use></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <nav class="sidebar" id="sidebar" aria-label="主导航"></nav>
+      <main class="main" id="main" tabindex="-1"></main>
+    </div>
+
+    <footer class="footer" id="footer">
+      <span class="footer-version" id="footer-version">HapiTest</span>
+      <span class="footer-project" id="footer-project"></span>
+      <span class="footer-hint">键盘：Tab 导航，Esc 关闭弹层</span>
+    </footer>
+  </div>
+
+  <div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+  <div class="overlay-root" id="overlay-root"></div>
+
+  <noscript>
+    <p class="noscript-warning">HapiTest 控制台需要启用 JavaScript 才能使用。</p>
+  </noscript>
+</body>
+</html>

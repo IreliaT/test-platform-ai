@@ -1,0 +1,51 @@
+{
+  "status": "incomplete",
+  "checks": [
+    {
+      "name": "python",
+      "status": "ready",
+      "detail": "3.9.6 (3.9.6)"
+    },
+    {
+      "name": "platform",
+      "status": "ready",
+      "detail": "HapiTest 0.1.0 / 协议 1.0"
+    },
+    {
+      "name": "data_dir",
+      "status": "ready",
+      "detail": "/Users/yutao/ideaSpace/hapi/hapi-test-platform/data"
+    },
+    {
+      "name": "data_dir_writable",
+      "status": "ready",
+      "detail": "可写"
+    },
+    {
+      "name": "web_assets",
+      "status": "ready",
+      "detail": "/Users/yutao/ideaSpace/hapi/hapi-test-platform/hapitest/web"
+    },
+    {
+      "name": "projects",
+      "status": "incomplete",
+      "detail": "共 0 个项目"
+    },
+    {
+      "name": "port",
+      "status": "ready",
+      "detail": "127.0.0.1:8801 可用"
+    }
+  ],
+  "config": [
+    "root_dir=/Users/yutao/ideaSpace/hapi/hapi-test-platform",
+    "data_dir=/Users/yutao/ideaSpace/hapi/hapi-test-platform/data",
+    "listen=127.0.0.1:8801",
+    "timeout_ms=15000",
+    "allow_hosts=<all>",
+    "deny_hosts=169.254.169.254,metadata.google.internal"
+  ],
+  "next_actions": [
+    "创建项目：python3 -m hapitest project create --name 我的项目"
+  ]
+}

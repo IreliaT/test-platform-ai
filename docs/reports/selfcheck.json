@@ -1,0 +1,241 @@
+{
+  "status": "passed",
+  "platform": "HapiTest 0.1.0",
+  "finished_at": "2026-10-12T06:03:35Z",
+  "duration_ms": 962,
+  "total": 19,
+  "passed": 19,
+  "failed": 0,
+  "checks": [
+    {
+      "name": "platform.importable",
+      "status": "passed",
+      "detail": "HapiTest 0.1.0",
+      "evidence": null
+    },
+    {
+      "name": "mock.script_exists",
+      "status": "passed",
+      "detail": "/Users/yutao/ideaSpace/hapi/hapi-test-platform/examples/mock_service.py",
+      "evidence": null
+    },
+    {
+      "name": "mock.started",
+      "status": "passed",
+      "detail": "http://127.0.0.1:52852",
+      "evidence": null
+    },
+    {
+      "name": "spec.exists",
+      "status": "passed",
+      "detail": "/Users/yutao/ideaSpace/hapi/hapi-test-platform/examples/demo_specs/demo_openapi.json",
+      "evidence": null
+    },
+    {
+      "name": "import.parsed",
+      "status": "passed",
+      "detail": "接口 7 个，用例 7 条",
+      "evidence": {
+        "created": 7,
+        "updated": 0,
+        "unchanged": 0,
+        "skipped": 0,
+        "cases_created": 7,
+        "cases_updated": 0,
+        "warnings": [
+          "敏感字段已留空: password"
+        ],
+        "source": "openapi",
+        "source_ref": "/Users/yutao/ideaSpace/hapi/hapi-test-platform/examples/demo_specs/demo_openapi.json"
+      }
+    },
+    {
+      "name": "import.persisted",
+      "status": "passed",
+      "detail": "新增接口 7，新增用例 7",
+      "evidence": null
+    },
+    {
+      "name": "import.idempotent",
+      "status": "passed",
+      "detail": "二次导入：新增 0，更新 0，未变化 14，新增用例 0",
+      "evidence": null
+    },
+    {
+      "name": "suite.created",
+      "status": "passed",
+      "detail": "套件包含 7 条用例",
+      "evidence": null
+    },
+    {
+      "name": "run.smoke_passed",
+      "status": "passed",
+      "detail": "状态=passed，通过 7/7，失败 0，错误 0，未完成 0",
+      "evidence": {
+        "id": "run_9342f2bb84c8",
+        "project_id": "selfcheck",
+        "status": "passed",
+        "trigger": "api",
+        "suite_id": 1,
+        "suite_name": "自检套件",
+        "env_id": 1,
+        "env_name": "默认环境",
+        "total": 7,
+        "passed": 7,
+        "failed": 0,
+        "errored": 0,
+        "incomplete": 0,
+        "skipped": 0,
+        "duration_ms": 6,
+        "started_at": "2026-10-12T06:03:34Z",
+        "finished_at": "2026-10-12T06:03:34Z",
+        "operator": "",
+        "note": "",
+        "request_id": "",
+        "fingerprint": "6f8967cd68674e98",
+        "logs": [
+          "运行开始：2026-10-12T06:03:34Z",
+          "运行结束：passed，通过 7/7，耗时 6ms"
+        ]
+      }
+    },
+    {
+      "name": "run.assertion_failure_detected",
+      "status": "passed",
+      "detail": "状态=failed（期望 failed）",
+      "evidence": [
+        {
+          "case_id": 8,
+          "case_name": "自检 · 断言失败用例",
+          "status": "failed",
+          "duration_ms": 1,
+          "started_at": "2026-10-12T06:03:34Z",
+          "attempts": 1,
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:52852/api/health",
+            "headers": {
+              "User-Agent": "HapiTest/0.1.0",
+              "Accept": "*/*"
+            },
+            "body": "",
+            "body_type": "none",
+            "folder": "自检"
+          },
+          "response": {
+            "ok": true,
+            "status": 200,
+            "headers": {
+              "Server": "HapiTestMock/1.0 Python/3.9.6",
+              "Date": "Mon, 12 Oct 2026 06:03:34 GMT",
+              "Content-Type": "application/json; charset=utf-8",
+              "Content-Length": "91",
+              "X-Mock-Server": "hapitest"
+            },
+            "body_text": "{\"code\": 0, \"msg\": \"ok\", \"data\": {\"status\": \"UP\", \"ts\": 1791785014, \"version\": \"mock-1.0\"}}",
+            "body_json": {
+              "code": 0,
+              "msg": "ok",
+              "data": {
+                "status": "UP",
+                "ts": 1791785014,
+                "version": "mock-1.0"
+              }
+            },
+            "duration_ms": 1,
+            "url": "http://127.0.0.1:52852/api/health",
+            "error": "",
+            "truncated": false,
+            "size_bytes": 91
+          },
+          "assertions": [
+            {
+              "index": 0,
+              "type": "status_code",
+              "operator": "eq",
+              "target": "status_code",
+              "expected": 599,
+              "actual": 200,
+              "passed": false,
+              "message": "实际值 200 不等于期望值 599",
+              "describe": "status_code eq 599"
+            }
+          ],
+          "extracted": {},
+          "steps": [],
+          "error": "status_code eq 599",
+          "logs": []
+        }
+      ]
+    },
+    {
+      "name": "run.missing_base_url_incomplete",
+      "status": "passed",
+      "detail": "状态=incomplete（期望 incomplete）",
+      "evidence": null
+    },
+    {
+      "name": "run.unreachable_error",
+      "status": "passed",
+      "detail": "状态=error（期望 error）",
+      "evidence": null
+    },
+    {
+      "name": "report.junit",
+      "status": "passed",
+      "detail": "XML 中 testcase 7 条，运行用例 7 条",
+      "evidence": null
+    },
+    {
+      "name": "report.html",
+      "status": "passed",
+      "detail": "24791 字节",
+      "evidence": null
+    },
+    {
+      "name": "report.json",
+      "status": "passed",
+      "detail": "24315 字节",
+      "evidence": null
+    },
+    {
+      "name": "isolation.project_scoped",
+      "status": "passed",
+      "detail": "另一项目接口 0，用例 0",
+      "evidence": null
+    },
+    {
+      "name": "isolation.separate_db",
+      "status": "passed",
+      "detail": "/private/var/folders/z7/6h_j7r1j3lv5bh_wvk583hy00000gn/T/hapitest-selfcheck-u4ef7rha/projects/selfcheck-isolated/platform.db、/private/var/folders/z7/6h_j7r1j3lv5bh_wvk583hy00000gn/T/hapitest-selfcheck-u4ef7rha/projects/selfcheck/platform.db",
+      "evidence": null
+    },
+    {
+      "name": "isolation.path_traversal_blocked",
+      "status": "passed",
+      "detail": "非法项目 ID 被拒绝",
+      "evidence": null
+    },
+    {
+      "name": "history.recorded",
+      "status": "passed",
+      "detail": "共 4 次运行",
+      "evidence": null
+    }
+  ],
+  "summary": {
+    "smoke_run": "run_9342f2bb84c8",
+    "smoke_total": 7,
+    "runs": [
+      "run_22048fb2f978",
+      "run_c27afec34ba0",
+      "run_4fd31b3bb773",
+      "run_9342f2bb84c8"
+    ]
+  },
+  "environment": {
+    "python": "3.9.6",
+    "cwd": "/Users/yutao/ideaSpace/hapi/hapi-test-platform",
+    "pid": 22727
+  }
+}

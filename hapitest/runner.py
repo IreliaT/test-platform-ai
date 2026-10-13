@@ -1,0 +1,657 @@
+"""执行引擎：用例执行、套件编排、后台任务队列。
+
+设计要点（与"缺条件不算通过"原则一致）：
+
+- 没有断言 → ``incomplete``，绝不因为"没报错"就算通过；
+- 没有 ``base_url`` → ``incomplete``，提示配置环境；
+- 请求没发出去/超时 → ``error``；
+- 断言失败 → ``failed``；
+- 用例被停用 → ``skipped``。
+
+隔离与并发：
+
+- 后台任务队列按项目串行（同一项目同一时刻只跑一个运行），不同项目可并行；
+- 并发度 > 1 的套件内部按用例并行，但每个用例使用独立的变量解析器，
+  运行级提取变量不跨用例共享（避免并发下的隐藏依赖）。
+"""
+
+from __future__ import annotations
+
+import queue
+import json
+import hashlib
+import threading
+import time
+import traceback
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field, replace
+from typing import Any, Dict, List, Optional, Sequence
+
+from .assertions import build_context, evaluate_all
+from .config import PlatformConfig
+from .db import vacuum_runs
+from .errors import NotFoundError, QueueFullError
+from .http_client import request as http_request
+from .models import (
+    CaseResult,
+    CaseSpec,
+    EnvironmentSpec,
+    HttpResponse,
+    RunResult,
+    now_iso,
+)
+from .redact import is_secret_key, mask, redact_headers, redact_mapping, redact_url
+from .repository import ProjectRecord, ProjectRegistry, Repository
+from .variables import VAR_PATTERN, VariableResolver, apply_extractors, build_resolver, extract_value
+
+ACTIVE_STATUSES = ("queued", "running")
+TERMINAL_STATUSES = ("passed", "failed", "error", "incomplete", "canceled")
+
+
+@dataclass
+class RunRequest:
+    """一次运行的请求参数。"""
+
+    project_id: str
+    case_ids: List[int] = field(default_factory=list)
+    suite_id: Optional[int] = None
+    env_id: Optional[int] = None
+    trigger: str = "manual"
+    note: str = ""
+    operator: str = ""
+    request_id: str = ""
+    variables: Dict[str, Any] = field(default_factory=dict)
+
+    def signature(self) -> str:
+        return "suite=%s;cases=%s;env=%s;vars=%s" % (
+            self.suite_id,
+            ",".join(str(item) for item in self.case_ids),
+            self.env_id,
+            sorted(self.variables.items()),
+        )
+
+
+class CaseRunner:
+    """单条用例执行器。
+
+    每个执行器持有自己的 Cookie Jar：同一次运行内的用例/前置步骤共享会话
+    （典型场景是"登录一次，后续接口带上会话 Cookie"）；并发套件为每条用例
+    单独创建执行器，避免共享会话造成的隐藏依赖。
+    """
+
+    def __init__(
+        self,
+        config: PlatformConfig,
+        repository: Repository,
+        project: Optional[ProjectRecord] = None,
+        cookie_jar: Optional[Dict[str, str]] = None,
+    ) -> None:
+        self.config = config
+        self.repo = repository
+        self.project = project
+        self.cookie_jar: Dict[str, str] = cookie_jar if cookie_jar is not None else {}
+
+    def run_case(
+        self,
+        case: CaseSpec,
+        environment: EnvironmentSpec,
+        run_variables: Optional[Dict[str, Any]] = None,
+        cancel_check: Optional[Any] = None,
+    ) -> CaseResult:
+        started_at = now_iso()
+        started = time.perf_counter()
+        result = CaseResult(case_id=case.id, case_name=case.name, started_at=started_at)
+
+        def finish(status: str, error: str = "") -> CaseResult:
+            result.status = status
+            result.error = error
+            result.duration_ms = int((time.perf_counter() - started) * 1000)
+            return result
+
+        if not case.enabled:
+            result.logs.append("用例已停用，跳过执行")
+            return finish("skipped")
+
+        base_url = (case.request.base_url or environment.base_url or (self.project.base_url if self.project else "") or "").strip()
+        if not case.request.path:
+            return finish("incomplete", "用例未配置请求路径")
+        if not case.assertions:
+            return finish("incomplete", "用例未定义任何断言，无法判定结果")
+        if "://" not in case.request.path and not base_url:
+            return finish("incomplete", "未配置 base_url：请在用例、环境或项目中设置请求地址")
+
+        resolver = build_resolver(
+            dict(run_variables or {}),
+            dict(case.variables or {}),
+            dict(environment.variables or {}),
+        )
+        resolver.set("_case_started_epoch", int(time.time()) - 5)
+        # 请求里的变量引用了但没定义时，直接说清楚，避免出现"莫名其妙的 400/401"
+        unresolved = _unresolved_request_variables(case, resolver)
+        if unresolved:
+            result.logs.append(
+                "以下变量未定义，将按原文发送（请在项目环境变量中补齐）：%s" % "、".join(unresolved)
+            )
+        auth = case.request.auth
+        if auth is not None and auth.type in ("inherit", "", None):
+            inherited = environment.auth.to_dict()
+            if inherited.get("type") not in ("inherit", "", None):
+                from .models import AuthSpec
+
+                case.request.auth = AuthSpec.from_dict(inherited)
+
+        # 前置步骤
+        for index, step in enumerate(case.setup):
+            if cancel_check is not None and cancel_check():
+                return finish("canceled", "运行已被取消")
+            step_started = time.perf_counter()
+            missing = [name for name in step.required_variables if resolver.get(name) in (None, "", "******")]
+            if missing:
+                return finish("incomplete", "步骤「%s」缺少环境变量：%s" % (step.name, "、".join(missing)))
+            timeout = max(0, min(int(step.poll_timeout_ms or 0), 300000))
+            if timeout and step.request.method not in ("GET", "HEAD") and not step.poll_read_only:
+                return finish("incomplete", "轮询步骤「%s」须为只读查询；POST 查询需明确 poll_read_only=true" % step.name)
+            deadline = time.monotonic() + timeout / 1000
+            attempt = 0
+            while True:
+                if cancel_check is not None and cancel_check():
+                    return finish("canceled", "运行已被取消")
+                attempt += 1
+                poll_request = step.request
+                if timeout:
+                    remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
+                    poll_request = replace(step.request, timeout_ms=min(step.request.timeout_ms or self.config.default_timeout_ms, remaining_ms))
+                step_response = self._send(poll_request, base_url, resolver)
+                # 提取与断言在临时变量层中执行，失败的轮询不污染后续请求。
+                candidate = build_resolver(resolver.as_dict())
+                extractors = [replace(item, expression=resolver.resolve_text(item.expression)) for item in step.extractors]
+                extracted, warnings = apply_extractors(step_response, extractors, candidate)
+                required_missing = [item.name for item in extractors if item.required and
+                                    (not extract_value(step_response, item)[0] or candidate.get(item.name) in (None, ""))]
+                checks = self._evaluate(step.assertions, step_response, candidate)
+                status = "error" if step_response.error else ("failed" if required_missing or any(not item.passed for item in checks) else "passed")
+                step_record = {
+                    "name": step.name or ("前置步骤 %d" % (index + 1)), "status": status,
+                    "attempts": attempt, "duration_ms": int((time.perf_counter() - step_started) * 1000),
+                    "request": dict(step_response.request_preview), "response": self._record_response(step_response),
+                    "extracted": extracted, "warnings": warnings,
+                    "assertions": [item.to_dict() for item in checks],
+                }
+                if status == "passed":
+                    apply_extractors(step_response, extractors, resolver)
+                    break
+                if step_response.error or (step_response.status or 0) >= 400 or time.monotonic() >= deadline:
+                    break
+                remaining = deadline - time.monotonic()
+                pause = min(max(10, int(step.poll_interval_ms or 1000)) / 1000, remaining)
+                until = time.monotonic() + pause
+                while time.monotonic() < until:
+                    if cancel_check is not None and cancel_check():
+                        return finish("canceled", "运行已被取消")
+                    time.sleep(min(0.1, max(0, until - time.monotonic())))
+            result.steps.append(step_record)
+            if step_record["status"] != "passed" and not step.continue_on_failure:
+                return finish("incomplete", "前置步骤失败：%s" % step_record["name"])
+
+        attempts = max(1, int(case.retries or 0) + 1)
+        last_response: Optional[HttpResponse] = None
+        for attempt in range(1, attempts + 1):
+            if cancel_check is not None and cancel_check():
+                return finish("canceled", "运行已被取消")
+            result.attempts = attempt
+            response = self._send(case.request, base_url, resolver)
+            last_response = response
+            result.request = dict(response.request_preview)
+            # folder 供报告按分组归类（JUnit 的 classname）
+            result.request["folder"] = case.folder or "未分组"
+            result.response = self._record_response(response)
+
+            if response.error:
+                result.assertions = []
+                if attempt < attempts:
+                    result.logs.append("第 %d 次请求失败：%s，重试" % (attempt, response.error))
+                    continue
+                return finish("error", response.error)
+
+            assertion_results = self._evaluate(case.assertions, response, resolver)
+            result.assertions = assertion_results
+
+            if case.extractors:
+                extracted, warnings = apply_extractors(response, case.extractors, resolver)
+                result.extracted.update(extracted)
+                result.logs.extend(warnings)
+
+            failed = [item for item in assertion_results if not item.passed]
+            if not failed:
+                return finish("passed")
+            if attempt < attempts:
+                result.logs.append("第 %d 次断言失败 %d 条，重试" % (attempt, len(failed)))
+                continue
+            return finish("failed", "；".join(item.describe or item.message for item in failed[:3]))
+
+        # 理论上不可达
+        if last_response is not None and last_response.error:
+            return finish("error", last_response.error)
+        return finish("failed")
+
+    def _send(self, request_spec, base_url: str, resolver: VariableResolver) -> HttpResponse:
+        resolver.set("_now_epoch", int(time.time()) + 1)
+        return http_request(request_spec, self.config, base_url=base_url, resolver=resolver, cookie_jar=self.cookie_jar)
+
+    def _evaluate(self, assertions, response, resolver):
+        resolved = [replace(item, expected=resolver.resolve_value(item.expected),
+                            path=resolver.resolve_text(item.path)) for item in assertions]
+        results = evaluate_all(resolved, build_context(response, resolver.as_dict()))
+        for item in results:
+            if is_secret_key(item.target):
+                item.actual, item.expected = mask(item.actual), mask(item.expected)
+                item.message = "敏感字段断言%s（取值已脱敏）" % ("通过" if item.passed else "失败")
+                item.describe = "%s[%s] %s（取值已脱敏）" % (item.type, item.target, item.operator)
+            else:
+                item.actual = redact_mapping(item.actual) if isinstance(item.actual, (dict, list)) else item.actual
+                item.expected = redact_mapping(item.expected) if isinstance(item.expected, (dict, list)) else item.expected
+        return results
+
+    def _record_response(self, response: HttpResponse) -> Dict[str, Any]:
+        """落库前的响应记录：脱敏 + 截断，保留足够定位问题的信息。"""
+        body = (json.dumps(redact_mapping(response.body_json), ensure_ascii=False)
+                if isinstance(response.body_json, (dict, list)) else response.body_text or "")
+        if len(body) > self.config.capture_body_bytes:
+            body = body[: self.config.capture_body_bytes] + "\n…（已截断）"
+        return {
+            "ok": response.ok,
+            "status": response.status,
+            "headers": redact_headers(response.headers),
+            "body_text": body,
+            "body_json": redact_mapping(response.body_json) if isinstance(response.body_json, (dict, list)) else response.body_json,
+            "duration_ms": response.duration_ms,
+            "url": redact_url(response.url),
+            "error": response.error,
+            "truncated": response.truncated,
+            "size_bytes": response.size_bytes,
+        }
+
+
+def _unresolved_request_variables(case: CaseSpec, resolver: VariableResolver) -> List[str]:
+    """收集请求模板里引用但当前解析不到的变量名（去重、保持出现顺序）。"""
+    names: List[str] = []
+    sources = [case.request.path, case.request.body]
+    for item in list(case.request.query) + list(case.request.headers) + list(case.request.cookies):
+        sources.append(item.value)
+    for value in sources:
+        if not isinstance(value, str):
+            continue
+        for match in VAR_PATTERN.finditer(value):
+            name = match.group("name") if "name" in (match.groupdict() or {}) else None
+            if name is None:
+                continue
+            if name not in names and resolver.get(name, None) is None:
+                names.append(name)
+    return names
+
+
+class RunManager:
+    """后台运行队列：提交、执行、取消、查询。"""
+
+    def __init__(self, config: PlatformConfig, registry: ProjectRegistry, capacity: int = 32) -> None:
+        self.config = config
+        self.registry = registry
+        self.capacity = max(4, int(capacity))
+        self._queue: "queue.Queue[Optional[str]]" = queue.Queue(maxsize=self.capacity)
+        self._lock = threading.RLock()
+        self._cancel_flags: Dict[str, threading.Event] = {}
+        self._project_locks: Dict[str, threading.Lock] = {}
+        self._threads: List[threading.Thread] = []
+        self._payloads: Dict[str, Any] = {}
+        self._running = False
+
+    # ------------------------------------------------------------------ 生命周期
+    def start(self) -> None:
+        with self._lock:
+            if self._running:
+                return
+            self._running = True
+            for index in range(max(1, int(self.config.max_workers))):
+                thread = threading.Thread(target=self._worker, name="hapitest-worker-%d" % index, daemon=True)
+                thread.start()
+                self._threads.append(thread)
+
+    def stop(self, timeout: float = 5.0) -> None:
+        with self._lock:
+            if not self._running:
+                return
+            self._running = False
+            for _ in self._threads:
+                try:
+                    self._queue.put_nowait(None)
+                except queue.Full:
+                    pass
+            threads, self._threads = self._threads, []
+        for thread in threads:
+            thread.join(timeout=timeout)
+
+    def _worker(self) -> None:
+        while True:
+            try:
+                run_id = self._queue.get(timeout=0.5)
+            except queue.Empty:
+                with self._lock:
+                    if not self._running:
+                        return
+                continue
+            if run_id is None:
+                return
+            try:
+                self._execute(run_id)
+            except Exception:  # 后台线程绝不允许把异常抛出去
+                self._record_fatal(run_id)
+            finally:
+                self._queue.task_done()
+
+    # ------------------------------------------------------------------ 提交
+    def submit(self, request: RunRequest) -> RunResult:
+        repository = self.registry.repository(request.project_id)
+        project = self.registry.get(request.project_id)
+
+        case_ids = list(request.case_ids)
+        suite = None
+        if request.suite_id is not None:
+            suite = repository.get_suite(request.suite_id)
+            if not case_ids:
+                case_ids = list(suite.case_ids)
+        if not case_ids:
+            raise NotFoundError("没有可执行的用例：请提供 case_ids 或选择包含用例的套件")
+
+        cases = repository.get_cases(case_ids)
+        if not cases:
+            raise NotFoundError("用例不存在：%s" % case_ids)
+        case_ids = [int(case.id) for case in cases if case.id is not None]
+
+        environment = repository.resolve_environment(request.env_id if request.env_id is not None else (suite.env_id if suite else None))
+        run = RunResult(
+            project_id=request.project_id,
+            status="queued",
+            trigger=request.trigger or "manual",
+            suite_id=(suite.id if suite else None),
+            suite_name=(suite.name if suite else ""),
+            env_id=environment.id,
+            env_name=environment.name,
+            started_at=now_iso(),
+            operator=request.operator,
+            note=request.note,
+            request_id=request.request_id,
+            fingerprint=repository.fingerprint(case_ids),
+        )
+        run.logs.append("运行已排队：%d 条用例，环境=%s" % (len(case_ids), environment.name or "未配置"))
+        repository.create_run(run)
+        self._store_case_ids(run.id, case_ids, request.variables, project.id, request.signature())
+
+        with self._lock:
+            self._cancel_flags[run.id] = threading.Event()
+        try:
+            self._queue.put_nowait(run.id)
+        except queue.Full:
+            repository.set_run_status(run.id, "error")
+            run.status = "error"
+            run.logs.append("执行队列已满，运行未开始")
+            repository.update_run(run)
+            raise QueueFullError("执行队列已满（容量 %d），请稍后重试" % self.capacity)
+        self.start()
+        return run
+
+    def cancel(self, project_id: str, run_id: str) -> bool:
+        repository = self.registry.repository(project_id)
+        run = repository.get_run(run_id, with_cases=False)
+        if run.status in TERMINAL_STATUSES:
+            return False
+        with self._lock:
+            flag = self._cancel_flags.get(run_id)
+        if flag is not None:
+            flag.set()
+        repository.set_run_status(run_id, "canceled")
+        run.status = "canceled"
+        run.finished_at = now_iso()
+        run.logs.append("运行已被取消")
+        repository.update_run(run)
+        return True
+
+    # ------------------------------------------------------------------ 执行
+    def _project_lock(self, project_id: str) -> threading.Lock:
+        with self._lock:
+            lock = self._project_locks.get(project_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._project_locks[project_id] = lock
+            return lock
+
+    def _execute(self, run_id: str) -> None:
+        with self._lock:
+            flag = self._cancel_flags.get(run_id)
+        payload = self._load_payload(run_id)
+        if payload is None:
+            return
+        project_id, case_ids, variables = payload
+        repository = self.registry.repository(project_id)
+        project = self.registry.get(project_id)
+        lock = self._project_lock(project_id)
+
+        # 同一项目串行执行，避免相互干扰；不同项目可并行
+        with lock:
+            run = repository.get_run(run_id, with_cases=False)
+            if run.status == "canceled" or (flag is not None and flag.is_set()):
+                run.logs.append("运行在开始前已被取消")
+                run.status = "canceled"
+                run.finished_at = now_iso()
+                repository.update_run(run)
+                return
+            run.status = "running"
+            run.logs.append("运行开始：%s" % now_iso())
+            repository.update_run(run)
+
+            environment = repository.resolve_environment(run.env_id)
+            runner = CaseRunner(self.config, repository, project)
+            started = time.perf_counter()
+            cancel_check = (lambda: bool(flag and flag.is_set())) if flag else None
+
+            suite = repository.get_suite(run.suite_id) if run.suite_id else None
+            concurrency = max(1, int(suite.concurrency)) if suite else 1
+            stop_on_failure = bool(suite and suite.failure_strategy == "stop")
+            cases = repository.get_cases(case_ids)
+
+            results: List[CaseResult] = []
+            if concurrency > 1 and len(cases) > 1:
+                # 并发执行时为每条用例创建独立执行器（独立 Cookie Jar），避免会话串扰
+                with ThreadPoolExecutor(max_workers=min(concurrency, len(cases))) as pool:
+                    futures = [
+                        pool.submit(
+                            CaseRunner(self.config, repository, project).run_case,
+                            case,
+                            environment,
+                            dict(variables),
+                            cancel_check,
+                        )
+                        for case in cases
+                    ]
+                    for future in futures:
+                        try:
+                            results.append(future.result())
+                        except Exception as exc:  # 单个用例异常不影响整体
+                            results.append(self._crash_result(exc))
+            else:
+                for case in cases:
+                    if cancel_check is not None and cancel_check():
+                        run.logs.append("运行被取消，剩余用例未执行")
+                        break
+                    try:
+                        result = runner.run_case(case, environment, dict(variables), cancel_check)
+                    except Exception as exc:
+                        result = self._crash_result(exc, case)
+                    results.append(result)
+                    repository.save_case_result(run_id, result)
+                    if stop_on_failure and result.status in ("failed", "error", "incomplete", "canceled"):
+                        run.logs.append("套件配置为失败即停止，剩余用例未执行")
+                        break
+
+            if concurrency > 1:
+                for result in results:
+                    repository.save_case_result(run_id, result)
+
+            run.case_results = results
+            run.recount()
+            run.duration_ms = int((time.perf_counter() - started) * 1000)
+            run.finished_at = now_iso()
+            if flag is not None and flag.is_set() and run.status != "canceled":
+                run.status = "canceled"
+                run.logs.append("运行已被取消")
+            else:
+                run.finalize_status()
+            run.logs.append("运行结束：%s，通过 %d/%d，耗时 %dms" % (run.status, run.passed, run.total, run.duration_ms))
+            repository.update_run(run)
+            try:
+                vacuum_runs(repository.conn, self.config.run_retention)
+                self._prune_payloads(project_id, repository)
+            except Exception:
+                pass
+        with self._lock:
+            self._cancel_flags.pop(run_id, None)
+            self._payloads.pop(run_id, None)
+
+    def _crash_result(self, exc: Exception, case: Optional[CaseSpec] = None) -> CaseResult:
+        return CaseResult(
+            case_id=(case.id if case else None),
+            case_name=(case.name if case else "未知用例"),
+            status="error",
+            started_at=now_iso(),
+            error="平台内部错误：%s" % exc,
+            logs=[traceback.format_exc(limit=3)],
+        )
+
+    def _payload_path(self, project_id: str, run_id: str):
+        return self.config.project_dir(project_id) / "runs" / ("%s.json" % run_id)
+
+    def _store_case_ids(
+        self,
+        run_id: str,
+        case_ids: Sequence[int],
+        variables: Dict[str, Any],
+        project_id: str,
+        signature: str = "",
+    ) -> None:
+        """运行参数落盘：进程重启后仍能解释历史运行，也便于人工排查。"""
+        import json
+
+        path = self._payload_path(project_id, run_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"run_id": run_id, "case_ids": [int(item) for item in case_ids], "variables": redact_mapping(variables or {}),
+                   "signature": "sha256:" + hashlib.sha256(signature.encode("utf-8")).hexdigest() if signature else ""}
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        with self._lock:
+            # 执行使用内存中的真实参数；磁盘快照只保存脱敏值。
+            self._payloads[run_id] = (project_id, list(payload["case_ids"]), dict(variables or {}))
+
+    def _load_payload(self, run_id: str) -> Optional[Any]:
+        import json
+
+        with self._lock:
+            cached = self._payloads.get(run_id)
+        if cached is not None:
+            return cached
+        for record in self.registry.list_projects():
+            path = self._payload_path(record.id, run_id)
+            if path.exists():
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                except (ValueError, OSError):
+                    return None
+                return record.id, [int(item) for item in data.get("case_ids", [])], dict(data.get("variables") or {})
+        return None
+
+    def _prune_payloads(self, project_id: str, repository: Repository) -> int:
+        """删除已被清理的运行对应的参数快照文件，避免数据目录无限增长。"""
+        runs_dir = self.config.project_dir(project_id) / "runs"
+        if not runs_dir.exists():
+            return 0
+        keep = {run.id for run in repository.list_runs(limit=max(1, self.config.run_retention))[0]}
+        removed = 0
+        for path in runs_dir.glob("*.json"):
+            if path.stem not in keep:
+                try:
+                    path.unlink()
+                    removed += 1
+                    with self._lock:
+                        self._payloads.pop(path.stem, None)
+                except OSError:
+                    pass
+        return removed
+
+    def _record_fatal(self, run_id: str) -> None:
+        for record in self.registry.list_projects():
+            try:
+                repository = self.registry.repository(record.id)
+                run = repository.get_run(run_id, with_cases=False)
+            except NotFoundError:
+                continue
+            except Exception:
+                return
+            if run.status in TERMINAL_STATUSES:
+                return
+            run.status = "error"
+            run.finished_at = now_iso()
+            run.logs.append("执行器异常终止：\n%s" % traceback.format_exc(limit=5))
+            try:
+                repository.update_run(run)
+            except Exception:
+                pass
+            return
+
+    # ------------------------------------------------------------------ 幂等与等待
+    def find_existing(self, request: RunRequest) -> Optional[RunResult]:
+        """request_id 幂等：同参数返回既有运行，不同参数抛冲突。"""
+        if not request.request_id:
+            return None
+        try:
+            repository = self.registry.repository(request.project_id)
+        except NotFoundError:
+            return None
+        existing = repository.find_run_by_request_id(request.request_id)
+        if existing is None:
+            return None
+        stored = self._stored_signature(request.project_id, existing.id)
+        signature = request.signature()
+        # 兼容已有运行保存的原始签名，新运行只保存摘要。
+        if stored and stored not in (signature, "sha256:" + hashlib.sha256(signature.encode("utf-8")).hexdigest()):
+            from .errors import ConflictError
+
+            raise ConflictError(
+                "request_id %s 已用于其它参数的运行（%s），请更换 request_id" % (request.request_id, existing.id)
+            )
+        return existing
+
+    def _stored_signature(self, project_id: str, run_id: str) -> str:
+        import json
+
+        path = self._payload_path(project_id, run_id)
+        if not path.exists():
+            return ""
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            return ""
+        return str(data.get("signature", "") or "")
+
+    def wait(self, project_id: str, run_id: str, timeout_s: float = 600.0) -> RunResult:
+        """阻塞等待运行进入终态。"""
+        repository = self.registry.repository(project_id)
+        deadline = time.time() + max(1.0, float(timeout_s))
+        while time.time() < deadline:
+            current = repository.get_run(run_id, with_cases=True)
+            if current.status in TERMINAL_STATUSES:
+                return current
+            time.sleep(0.2)
+        return repository.get_run(run_id, with_cases=True)
+
+    # ------------------------------------------------------------------ 同步执行
+    def run_sync(self, request: RunRequest, timeout_s: float = 900.0) -> RunResult:
+        """同步执行（CLI 与单条调试使用）。"""
+        run = self.submit(request)
+        return self.wait(request.project_id, run.id, timeout_s=timeout_s)
