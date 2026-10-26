@@ -1,10 +1,13 @@
-"""项目注册表与仓储层测试（含项目隔离）。"""
+"""项目注册表与仓储层测试（含项目隔离与结构迁移）。"""
 
 from __future__ import annotations
 
+import sqlite3
+import tempfile
 import unittest
 from pathlib import Path
 
+from hapitest import db
 from hapitest.errors import ConflictError, NotFoundError, ValidationError
 from hapitest.models import (
     AssertionSpec,
@@ -120,9 +123,13 @@ class EndpointRepositoryTest(unittest.TestCase):
     def test_folder_summary(self) -> None:
         self.repo.create_endpoint(EndpointSpec(name="A", method="GET", path="/api/a", folder="用户", tags=["v1"]))
         self.repo.create_case(CaseSpec(name="C", folder="冒烟", request=RequestSpec(path="/api/a")))
+        case = self.repo.create_case(CaseSpec(name="C2", request=RequestSpec(path="/api/a")))
+        self.repo.create_suite(SuiteSpec(name="S", folder="回归", case_ids=[case.id]))
         summary = self.repo.folder_summary()
         self.assertEqual(summary["endpoint_folders"], ["用户"])
         self.assertEqual(summary["case_folders"], ["冒烟"])
+        # 套件目录独立统计，供套件页的「目录」筛选使用
+        self.assertEqual(summary["suite_folders"], ["回归"])
         self.assertIn("v1", summary["tags"])
 
 
@@ -147,6 +154,41 @@ class CaseRepositoryTest(unittest.TestCase):
         suite = self.repo.create_suite(SuiteSpec(name="S", case_ids=[case.id, case2.id]))
         self.repo.delete_case(case.id)
         self.assertEqual(self.repo.get_suite(suite.id).case_ids, [case2.id])
+
+    def test_suite_folder_round_trip(self) -> None:
+        case = self.repo.create_case(CaseSpec(name="C1", request=RequestSpec(path="/x")))
+        suite = self.repo.create_suite(
+            SuiteSpec(name="A2 分页列表", folder="官方靓号库", case_ids=[case.id])
+        )
+        self.assertEqual(self.repo.get_suite(suite.id).folder, "官方靓号库")
+        self.assertEqual(suite.to_dict()["folder"], "官方靓号库")
+
+        suite.folder = "官方靓号库/后台"
+        self.repo.update_suite(suite.id, suite)
+        reloaded = self.repo.get_suite(suite.id)
+        self.assertEqual(reloaded.folder, "官方靓号库/后台")
+
+        # 未指定目录时落「未分组」，不应出现 None
+        plain = self.repo.create_suite(SuiteSpec(name="无目录", case_ids=[case.id]))
+        self.assertEqual(self.repo.get_suite(plain.id).folder, "")
+
+    def test_suite_variables_round_trip(self) -> None:
+        case = self.repo.create_case(CaseSpec(name="C1", request=RequestSpec(path="/x")))
+        suite = self.repo.create_suite(
+            SuiteSpec(name="带参数的套件", variables={"uid": "11002850"}, case_ids=[case.id])
+        )
+        self.assertEqual(self.repo.get_suite(suite.id).variables, {"uid": "11002850"})
+
+        suite.variables = {"uid": "2", "reason": "回归"}
+        self.repo.update_suite(suite.id, suite)
+        self.assertEqual(self.repo.get_suite(suite.id).variables, {"uid": "2", "reason": "回归"})
+
+        plain = self.repo.create_suite(SuiteSpec(name="无参数", case_ids=[case.id]))
+        self.assertEqual(self.repo.get_suite(plain.id).variables, {})
+
+    def test_suite_folder_trims_whitespace(self) -> None:
+        parsed = SuiteSpec.from_dict({"name": "S", "folder": "  官方靓号库  "})
+        self.assertEqual(parsed.folder, "官方靓号库")
 
     def test_environment_mask_keeps_original(self) -> None:
         environment = self.repo.create_environment(
@@ -228,6 +270,64 @@ class RunRepositoryTest(unittest.TestCase):
         batches = self.repo.list_imports()
         self.assertEqual(batches[0]["id"], batch_id)
         self.assertEqual(batches[0]["stats"]["created"], 3)
+
+
+class SchemaMigrationTest(unittest.TestCase):
+    """v1 老库升级到 v2：套件补 folder 列，历史数据落「未分组」，且可重复执行。"""
+
+    V1_SQL = """
+    CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    INSERT INTO schema_meta(key, value) VALUES ('schema_version', '1');
+    CREATE TABLE suite (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        case_ids_json TEXT NOT NULL DEFAULT '[]',
+        env_id INTEGER,
+        failure_strategy TEXT NOT NULL DEFAULT 'continue',
+        concurrency INTEGER NOT NULL DEFAULT 1,
+        tags_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT ''
+    );
+    INSERT INTO suite (name, description, case_ids_json) VALUES ('老套件', '迁移前数据', '[1,2]');
+    """
+
+    def test_v1_database_gains_folder_and_keeps_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "platform.db"
+            conn = sqlite3.connect(str(path))
+            conn.executescript(self.V1_SQL)
+            conn.commit()
+            conn.close()
+
+            upgraded = db.connect(path)
+            columns = {row[1] for row in upgraded.execute("PRAGMA table_info(suite)")}
+            self.assertIn("folder", columns)
+            self.assertIn("variables_json", columns)
+            row = upgraded.execute("SELECT * FROM suite").fetchone()
+            self.assertEqual(row["name"], "老套件")
+            self.assertEqual(row["folder"], "")
+            self.assertEqual(db.get_meta(upgraded, "schema_version"), str(db.SCHEMA_VERSION))
+            upgraded.close()
+
+            # 幂等：再连一次不报错、不重复加列
+            again = db.connect(path)
+            self.assertEqual(
+                [r[1] for r in again.execute("PRAGMA table_info(suite)")].count("folder"), 1
+            )
+            self.assertEqual(again.execute("SELECT COUNT(*) FROM suite").fetchone()[0], 1)
+            again.close()
+
+    def test_new_database_has_folder_column(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "platform.db"
+            conn = db.connect(path)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(suite)")}
+            self.assertIn("folder", columns)
+            self.assertIn("variables_json", columns)
+            self.assertEqual(db.get_meta(conn, "schema_version"), str(db.SCHEMA_VERSION))
+            conn.close()
 
 
 if __name__ == "__main__":

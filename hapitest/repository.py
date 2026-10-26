@@ -489,6 +489,9 @@ class Repository:
         case_folders = [
             row["folder"] for row in db.query_all(self.conn, "SELECT DISTINCT folder FROM test_case ORDER BY folder")
         ]
+        suite_folders = [
+            row["folder"] for row in db.query_all(self.conn, "SELECT DISTINCT folder FROM suite ORDER BY folder")
+        ]
         tags: set = set()
         for row in db.query_all(self.conn, "SELECT tags_json FROM endpoint UNION ALL SELECT tags_json FROM test_case"):
             for tag in db.loads(row["tags_json"], []):
@@ -496,6 +499,7 @@ class Repository:
         return {
             "endpoint_folders": [item for item in endpoint_folders if item],
             "case_folders": [item for item in case_folders if item],
+            "suite_folders": [item for item in suite_folders if item],
             "tags": sorted(tags),
         }
 
@@ -714,13 +718,16 @@ class Repository:
         with self._lock:
             cursor = db.execute(
                 self.conn,
-                """INSERT INTO suite (name, description, case_ids_json, env_id, failure_strategy, concurrency,
-                   tags_json, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)""",
+                """INSERT INTO suite (name, folder, description, case_ids_json, env_id, variables_json,
+                   failure_strategy, concurrency, tags_json, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     suite.name,
+                    suite.folder,
                     suite.description,
                     db.dumps(suite.case_ids),
                     suite.env_id,
+                    db.dumps(suite.variables or {}),
                     suite.failure_strategy,
                     int(suite.concurrency or 1),
                     db.dumps(suite.tags),
@@ -739,13 +746,15 @@ class Repository:
         with self._lock:
             db.execute(
                 self.conn,
-                """UPDATE suite SET name=?, description=?, case_ids_json=?, env_id=?, failure_strategy=?,
-                   concurrency=?, tags_json=?, updated_at=? WHERE id=?""",
+                """UPDATE suite SET name=?, folder=?, description=?, case_ids_json=?, env_id=?, variables_json=?,
+                   failure_strategy=?, concurrency=?, tags_json=?, updated_at=? WHERE id=?""",
                 (
                     suite.name,
+                    suite.folder,
                     suite.description,
                     db.dumps(suite.case_ids),
                     suite.env_id,
+                    db.dumps(suite.variables or {}),
                     suite.failure_strategy,
                     int(suite.concurrency or 1),
                     db.dumps(suite.tags),
@@ -764,9 +773,12 @@ class Repository:
         return SuiteSpec(
             id=int(row["id"]),
             name=row["name"],
+            # 只读连接可能跳过迁移，老库没有 folder 列时按未分组处理
+            folder=(row["folder"] if "folder" in row.keys() else ""),
             description=row["description"],
             case_ids=[int(item) for item in db.loads(row["case_ids_json"], [])],
             env_id=(None if row["env_id"] is None else int(row["env_id"])),
+            variables=db.loads(row["variables_json"], {}) if "variables_json" in row.keys() else {},
             failure_strategy=row["failure_strategy"],
             concurrency=int(row["concurrency"]),
             tags=db.loads(row["tags_json"], []),

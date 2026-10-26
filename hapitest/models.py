@@ -654,9 +654,11 @@ class SuiteSpec:
 
     id: Optional[int] = None
     name: str = ""
+    folder: str = ""
     description: str = ""
     case_ids: List[int] = field(default_factory=list)
     env_id: Optional[int] = None
+    variables: Dict[str, Any] = field(default_factory=dict)
     failure_strategy: str = "continue"  # continue | stop
     concurrency: int = 1
     tags: List[str] = field(default_factory=list)
@@ -667,9 +669,11 @@ class SuiteSpec:
         return {
             "id": self.id,
             "name": self.name,
+            "folder": self.folder,
             "description": self.description,
             "case_ids": list(self.case_ids),
             "env_id": self.env_id,
+            "variables": dict(self.variables),
             "failure_strategy": self.failure_strategy,
             "concurrency": int(self.concurrency or 1),
             "tags": list(self.tags),
@@ -684,9 +688,11 @@ class SuiteSpec:
         return cls(
             id=_as_int(data.get("id")),
             name=str(data.get("name", "") or ""),
+            folder=str(data.get("folder", "") or "").strip(),
             description=str(data.get("description", "") or ""),
             case_ids=[int(item) for item in (data.get("case_ids") or []) if str(item).strip() != ""],
             env_id=_as_int(data.get("env_id")),
+            variables=dict(data.get("variables") or {}) if isinstance(data.get("variables"), dict) else {},
             failure_strategy=str(data.get("failure_strategy", "continue") or "continue"),
             concurrency=int(_as_int(data.get("concurrency"), 1) or 1),
             tags=_str_list(data.get("tags")),

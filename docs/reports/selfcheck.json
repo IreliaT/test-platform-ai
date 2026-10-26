@@ -1,8 +1,8 @@
 {
   "status": "passed",
   "platform": "HapiTest 0.1.0",
-  "finished_at": "2026-10-12T06:03:35Z",
-  "duration_ms": 962,
+  "finished_at": "2026-10-26T03:34:03Z",
+  "duration_ms": 946,
   "total": 19,
   "passed": 19,
   "failed": 0,
@@ -22,7 +22,7 @@
     {
       "name": "mock.started",
       "status": "passed",
-      "detail": "http://127.0.0.1:52852",
+      "detail": "http://127.0.0.1:52762",
       "evidence": null
     },
     {
@@ -72,7 +72,7 @@
       "status": "passed",
       "detail": "状态=passed，通过 7/7，失败 0，错误 0，未完成 0",
       "evidence": {
-        "id": "run_9342f2bb84c8",
+        "id": "run_f783d81ff688",
         "project_id": "selfcheck",
         "status": "passed",
         "trigger": "api",
@@ -86,16 +86,23 @@
         "errored": 0,
         "incomplete": 0,
         "skipped": 0,
-        "duration_ms": 6,
-        "started_at": "2026-10-12T06:03:34Z",
-        "finished_at": "2026-10-12T06:03:34Z",
+        "duration_ms": 5,
+        "started_at": "2026-10-26T03:34:02Z",
+        "finished_at": "2026-10-26T03:34:02Z",
         "operator": "",
         "note": "",
         "request_id": "",
-        "fingerprint": "6f8967cd68674e98",
+        "fingerprint": "75b901ed7d844fae",
         "logs": [
-          "运行开始：2026-10-12T06:03:34Z",
-          "运行结束：passed，通过 7/7，耗时 6ms"
+          "运行开始：2026-10-26T03:34:02Z",
+          "[2026-10-26T03:34:02Z] ✓ 健康检查 - 冒烟 → 通过（1ms）",
+          "[2026-10-26T03:34:02Z] ✓ 分页查询用户 - 冒烟 → 通过（0ms）",
+          "[2026-10-26T03:34:02Z] ✓ 创建用户 - 冒烟 → 通过（0ms）",
+          "[2026-10-26T03:34:02Z] ✓ 查询用户详情 - 冒烟 → 通过（0ms）",
+          "[2026-10-26T03:34:02Z] ✓ 更新用户 - 冒烟 → 通过（0ms）",
+          "[2026-10-26T03:34:02Z] ✓ 删除用户 - 冒烟 → 通过（0ms）",
+          "[2026-10-26T03:34:02Z] ✓ 登录获取令牌 - 冒烟 → 通过（0ms）",
+          "运行结束：passed，通过 7/7，耗时 5ms"
         ]
       }
     },
@@ -109,11 +116,11 @@
           "case_name": "自检 · 断言失败用例",
           "status": "failed",
           "duration_ms": 1,
-          "started_at": "2026-10-12T06:03:34Z",
+          "started_at": "2026-10-26T03:34:02Z",
           "attempts": 1,
           "request": {
             "method": "GET",
-            "url": "http://127.0.0.1:52852/api/health",
+            "url": "http://127.0.0.1:52762/api/health",
             "headers": {
               "User-Agent": "HapiTest/0.1.0",
               "Accept": "*/*"
@@ -126,24 +133,24 @@
             "ok": true,
             "status": 200,
             "headers": {
-              "Server": "HapiTestMock/1.0 Python/3.9.6",
-              "Date": "Mon, 12 Oct 2026 06:03:34 GMT",
+              "Server": "HapiTestMock/1.0 Python/3.12.14",
+              "Date": "Mon, 26 Oct 2026 03:34:02 GMT",
               "Content-Type": "application/json; charset=utf-8",
               "Content-Length": "91",
               "X-Mock-Server": "hapitest"
             },
-            "body_text": "{\"code\": 0, \"msg\": \"ok\", \"data\": {\"status\": \"UP\", \"ts\": 1791785014, \"version\": \"mock-1.0\"}}",
+            "body_text": "{\"code\": 0, \"msg\": \"ok\", \"data\": {\"status\": \"UP\", \"ts\": 1792985642, \"version\": \"mock-1.0\"}}",
             "body_json": {
               "code": 0,
               "msg": "ok",
               "data": {
                 "status": "UP",
-                "ts": 1791785014,
+                "ts": 1792985642,
                 "version": "mock-1.0"
               }
             },
-            "duration_ms": 1,
-            "url": "http://127.0.0.1:52852/api/health",
+            "duration_ms": 0,
+            "url": "http://127.0.0.1:52762/api/health",
             "error": "",
             "truncated": false,
             "size_bytes": 91
@@ -164,7 +171,16 @@
           "extracted": {},
           "steps": [],
           "error": "status_code eq 599",
-          "logs": []
+          "logs": [
+            "[2026-10-26T03:34:02Z] 开始执行用例 #8 自检 · 断言失败用例",
+            "[2026-10-26T03:34:02Z] 环境 默认环境 · base_url http://127.0.0.1:52762",
+            "[2026-10-26T03:34:02Z] → GET http://127.0.0.1:52762/api/health",
+            "[2026-10-26T03:34:02Z]   请求头：User-Agent=HapiTest/0.1.0；Accept=*/*",
+            "[2026-10-26T03:34:02Z] ← HTTP 200（0ms，91 字节）",
+            "[2026-10-26T03:34:02Z]   响应体：{\"code\": 0, \"msg\": \"ok\", \"data\": {\"status\": \"UP\", \"ts\": 1792985642, \"version\": \"mock-1.0\"}}",
+            "[2026-10-26T03:34:02Z]   ✗ 断言 1/1：status_code eq 599（实际值 200 不等于期望值 599）",
+            "[2026-10-26T03:34:02Z] 结果：失败（status_code eq 599），耗时 1ms"
+          ]
         }
       ]
     },
@@ -189,13 +205,13 @@
     {
       "name": "report.html",
       "status": "passed",
-      "detail": "24791 字节",
+      "detail": "32095 字节",
       "evidence": null
     },
     {
       "name": "report.json",
       "status": "passed",
-      "detail": "24315 字节",
+      "detail": "31604 字节",
       "evidence": null
     },
     {
@@ -207,7 +223,7 @@
     {
       "name": "isolation.separate_db",
       "status": "passed",
-      "detail": "/private/var/folders/z7/6h_j7r1j3lv5bh_wvk583hy00000gn/T/hapitest-selfcheck-u4ef7rha/projects/selfcheck-isolated/platform.db、/private/var/folders/z7/6h_j7r1j3lv5bh_wvk583hy00000gn/T/hapitest-selfcheck-u4ef7rha/projects/selfcheck/platform.db",
+      "detail": "/private/var/folders/z7/6h_j7r1j3lv5bh_wvk583hy00000gn/T/hapitest-selfcheck-owqj3gzi/projects/selfcheck-isolated/platform.db、/private/var/folders/z7/6h_j7r1j3lv5bh_wvk583hy00000gn/T/hapitest-selfcheck-owqj3gzi/projects/selfcheck/platform.db",
       "evidence": null
     },
     {
@@ -224,18 +240,18 @@
     }
   ],
   "summary": {
-    "smoke_run": "run_9342f2bb84c8",
+    "smoke_run": "run_f783d81ff688",
     "smoke_total": 7,
     "runs": [
-      "run_22048fb2f978",
-      "run_c27afec34ba0",
-      "run_4fd31b3bb773",
-      "run_9342f2bb84c8"
+      "run_e37efc0e6a50",
+      "run_041d7a3a175d",
+      "run_a4eec665da4c",
+      "run_f783d81ff688"
     ]
   },
   "environment": {
-    "python": "3.9.6",
+    "python": "3.12.14",
     "cwd": "/Users/yutao/ideaSpace/hapi/hapi-test-platform",
-    "pid": 22727
+    "pid": 61599
   }
 }

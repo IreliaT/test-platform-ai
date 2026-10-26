@@ -1315,6 +1315,15 @@ export function caseResultBlock(result, options = {}) {
     nodes.push(el('div', { class: 'banner banner-error' }, icon('i-alert'), el('span', { text: data.error })));
   }
 
+  // 执行日志置顶：先回答"跑了什么、回了什么、结果如何"，再看请求/断言明细
+  const logLines = Array.isArray(data.logs) ? data.logs.filter((line) => String(line || '').trim() !== '') : [];
+  nodes.push(el('h4', { text: '执行日志' }));
+  nodes.push(
+    logLines.length
+      ? el('pre', { text: truncate(logLines.join('\n'), 12000) })
+      : el('div', { class: 'faint', text: '本次执行没有产生日志（旧版本运行记录，或执行器未运行到请求阶段）。' })
+  );
+
   nodes.push(
     el(
       'div',
@@ -1337,10 +1346,6 @@ export function caseResultBlock(result, options = {}) {
     nodes.push(el('h4', { text: '前置/后置步骤' }));
     nodes.push(el('pre', { text: truncate(formatJson(data.steps), 4000) }));
   }
-  if (Array.isArray(data.logs) && data.logs.length) {
-    nodes.push(el('h4', { text: '日志' }));
-    nodes.push(el('pre', { text: truncate(data.logs.join('\n'), 4000) }));
-  }
   return el('div', { class: 'stack' }, nodes);
 }
 
@@ -1356,15 +1361,26 @@ const NAV_ITEMS = [
   { key: 'imports', label: '导入', icon: 'i-import' },
 ];
 
+// 入口脚本由服务端注入 ?v=<资源版本>，视图模块沿用同一版本，
+// 避免改了前端之后 SPA 还在用浏览器缓存的旧模块。
+const ASSET_VERSION = (() => {
+  try {
+    return new URL(import.meta.url).searchParams.get('v') || '';
+  } catch (err) {
+    return '';
+  }
+})();
+const ASSET_QUERY = ASSET_VERSION ? '?v=' + encodeURIComponent(ASSET_VERSION) : '';
+
 const VIEW_LOADERS = {
-  dashboard: () => import('./views/dashboard.js'),
-  endpoints: () => import('./views/endpoints.js'),
-  cases: () => import('./views/cases.js'),
-  suites: () => import('./views/suites.js'),
-  environments: () => import('./views/environments.js'),
-  runs: () => import('./views/runs.js'),
-  run_detail: () => import('./views/run_detail.js'),
-  imports: () => import('./views/imports.js'),
+  dashboard: () => import('./views/dashboard.js' + ASSET_QUERY),
+  endpoints: () => import('./views/endpoints.js' + ASSET_QUERY),
+  cases: () => import('./views/cases.js' + ASSET_QUERY),
+  suites: () => import('./views/suites.js' + ASSET_QUERY),
+  environments: () => import('./views/environments.js' + ASSET_QUERY),
+  runs: () => import('./views/runs.js' + ASSET_QUERY),
+  run_detail: () => import('./views/run_detail.js' + ASSET_QUERY),
+  imports: () => import('./views/imports.js' + ASSET_QUERY),
 };
 
 const viewCache = new Map();

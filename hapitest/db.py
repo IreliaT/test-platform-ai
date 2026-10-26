@@ -11,7 +11,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -68,9 +68,11 @@ CREATE INDEX IF NOT EXISTS idx_case_folder ON test_case(folder);
 CREATE TABLE IF NOT EXISTS suite (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     name          TEXT NOT NULL,
+    folder        TEXT NOT NULL DEFAULT '',
     description   TEXT NOT NULL DEFAULT '',
     case_ids_json TEXT NOT NULL DEFAULT '[]',
     env_id        INTEGER,
+    variables_json TEXT NOT NULL DEFAULT '{}',
     failure_strategy TEXT NOT NULL DEFAULT 'continue',
     concurrency   INTEGER NOT NULL DEFAULT 1,
     tags_json     TEXT NOT NULL DEFAULT '[]',
@@ -177,15 +179,34 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         set_meta(conn, "schema_version", str(SCHEMA_VERSION))
     elif int(current) < SCHEMA_VERSION:
         migrate(conn, int(current))
+    _ensure_indexes(conn)
     conn.commit()
 
 
+def _table_columns(conn: sqlite3.Connection, table: str) -> set:
+    return {str(row["name"]) for row in conn.execute("PRAGMA table_info(%s)" % table).fetchall()}
+
+
+def _ensure_indexes(conn: sqlite3.Connection) -> None:
+    """依赖新列的索引放在迁移之后建，避免老库在 ALTER 前就执行失败。"""
+    if "folder" in _table_columns(conn, "suite"):
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_suite_folder ON suite(folder)")
+
+
 def migrate(conn: sqlite3.Connection, from_version: int) -> None:
-    """按版本顺序升级；当前只有 v1，保留扩展点。"""
+    """按版本顺序升级；每一步都必须可重复执行。"""
     version = from_version
-    while version < SCHEMA_VERSION:
-        version += 1
-    set_meta(conn, "schema_version", str(version))
+    if version < 2:
+        # v2：套件增加目录（folder），老库补列，历史数据落到「未分组」
+        if "folder" not in _table_columns(conn, "suite"):
+            conn.execute("ALTER TABLE suite ADD COLUMN folder TEXT NOT NULL DEFAULT ''")
+        version = 2
+    if version < 3:
+        # v3：套件级运行变量，套件内用例共用的参数在这里维护
+        if "variables_json" not in _table_columns(conn, "suite"):
+            conn.execute("ALTER TABLE suite ADD COLUMN variables_json TEXT NOT NULL DEFAULT '{}'")
+        version = 3
+    set_meta(conn, "schema_version", str(max(version, SCHEMA_VERSION)))
 
 
 def get_meta(conn: sqlite3.Connection, key: str) -> Optional[str]:

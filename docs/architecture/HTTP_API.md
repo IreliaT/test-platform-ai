@@ -67,7 +67,7 @@
 | POST | `/api/v1/projects/{pid}/endpoints` | 新建（`spec.signature` 重复返回 409） |
 | GET/PUT/DELETE | `/api/v1/projects/{pid}/endpoints/{id}` | 详情 / 更新 / 删除 |
 | POST | `/api/v1/projects/{pid}/endpoints/{id}/to-case` | body `{name?, generate_assertions?}`，由接口生成用例 |
-| GET | `/api/v1/projects/{pid}/folders` | `{endpoint_folders:[], case_folders:[], tags:[]}` |
+| GET | `/api/v1/projects/{pid}/folders` | `{endpoint_folders:[], case_folders:[], suite_folders:[], tags:[]}` |
 | POST | `/api/v1/projects/{pid}/endpoints/{id}/probe` | 同步发起一次请求并返回 `HttpResponse`（不写历史） |
 
 ## 4. 用例（cases）
@@ -95,6 +95,9 @@ CaseSpec.setup 中的步骤另支持 `poll_timeout_ms`、`poll_interval_ms`、`p
 | GET | `/api/v1/projects/{pid}/suites` | 列表（含 `case_count`） |
 | POST | `/api/v1/projects/{pid}/suites` | 新建 |
 | GET/PUT/DELETE | `/api/v1/projects/{pid}/suites/{id}` | 详情 / 更新 / 删除 |
+
+套件体字段：`name`、`folder`（目录，空串表示「未分组」）、`description`、`case_ids`、`env_id`、
+`failure_strategy`、`concurrency`、`tags`。`folder` 只用于界面分组，不影响执行；同一目录下的套件在列表里成组展示。
 
 ## 6. 环境（environments）
 

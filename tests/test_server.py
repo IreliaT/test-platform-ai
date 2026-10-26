@@ -92,6 +92,8 @@ class ApiTestCase(unittest.TestCase):
     def test_static_index(self) -> None:
         html = self.call("GET", "/")
         self.assertIn("<html", html.lower())
+        # 入口脚本带资源版本号，避免改了前端还加载浏览器缓存的旧模块
+        self.assertRegex(html, r'src="/assets/app\.js\?v=\d+"')
         html = self.call("GET", "/some/spa/route")
         self.assertIn("<html", html.lower())
 

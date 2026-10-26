@@ -250,3 +250,4 @@ db.py + models.py ← repository.py ← runner.py / server / cli
 | `variables.apply_extractors` | 敏感名变量在执行器内保存明文，返回给历史的字典被掩码 | 执行需要真值，落库必须脱敏 |
 | `runner` | 记录到 `CaseResult.request` 的字典额外带 `folder` | 报告需要按分组生成 JUnit `classname` |
 | `runner` | 每次运行共享一个 Cookie Jar；并发套件为每条用例单独创建执行器 | 支持登录串联，同时避免并发下的会话串扰 |
+| `runner` | `CaseResult.logs` 逐条带 ISO 时间戳，记录用例开始、环境与 base_url、请求行/请求头/请求体、响应状态与响应体、逐条断言、提取变量、重试与终态；运行级 `RunResult.logs` 追加每条用例的结果概览 | 让"跑了什么、回了什么、为什么这么判定"在界面上自解释，不依赖外部日志 |

@@ -166,6 +166,22 @@ class App:
         return Response.ok(result)
 
     # --- 静态资源 ---
+    def asset_version(self) -> str:
+        """前端资源版本号：取 web 目录下最新修改时间。
+
+        无构建步骤，SPA 又不会重新 import 已加载的视图模块，所以给入口脚本带上
+        ``?v=``：浏览器缓存换版本即失效，改完前端普通刷新就能看到。
+        """
+        web_dir = self.config.web_dir
+        try:
+            latest = max(
+                (item.stat().st_mtime for item in web_dir.rglob("*") if item.is_file()),
+                default=0.0,
+            )
+        except OSError:
+            latest = 0.0
+        return str(int(latest))
+
     def static_response(self, path: str) -> Response:
         web_dir = self.config.web_dir
         if not web_dir.exists():
@@ -184,7 +200,10 @@ class App:
         index = web_dir / "index.html"
         if not index.exists():
             return Response.text("前端入口缺失：%s" % index, status=500)
-        return Response(status=200, body=index.read_bytes(), content_type="text/html; charset=utf-8")
+        html = index.read_text("utf-8")
+        # 入口脚本带上版本号，视图模块再按同一版本号动态 import，避免加载到旧的 JS
+        html = html.replace('src="/assets/app.js"', 'src="/assets/app.js?v=%s"' % self.asset_version())
+        return Response(status=200, body=html.encode("utf-8"), content_type="text/html; charset=utf-8")
 
 
 class _RequestHandler(BaseHTTPRequestHandler):

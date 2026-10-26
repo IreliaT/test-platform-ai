@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from hapitest import http_client, redact
 from hapitest.http_client import PreparedRequest, RequestBlocked, check_url_allowed, prepare, send
 from hapitest.models import AuthSpec, KeyValue, RequestSpec
+from hapitest.redact import is_secret_key, redact_mapping
 from hapitest.variables import VariableResolver
 from tests.support import LocalHttpServer, TempConfig
 
@@ -770,6 +771,25 @@ class PreviewSerializationTest(HttpClientTestBase):
         response = self.run_request(RequestSpec(path="/ok", headers=[KeyValue("X-Test", "v")]))
         self.assertEqual("v", response.request_preview["headers"]["X-Test"])
         self.assertEqual("GET", response.request_preview["method"])
+
+
+class RedactKeywordTest(unittest.TestCase):
+    """敏感词识别：既要盖住 sign 类凭据，也不能误伤普通业务字段。"""
+
+    def test_sign_fields_stay_secret(self) -> None:
+        for key in ("sign", "x-sign", "signStr", "signature", "oauth_sign", "SIGN"):
+            self.assertTrue(is_secret_key(key), key)
+
+    def test_assigned_is_not_secret(self) -> None:
+        # 官方库统计 data.assigned 是计数，不是签名
+        for key in ("assigned", "assignedCount", "design", "resigned"):
+            self.assertFalse(is_secret_key(key), key)
+
+    def test_secret_values_are_masked_but_assigned_kept(self) -> None:
+        masked = redact_mapping({"assigned": 4, "sign": "abc", "userToken": "t"})
+        self.assertEqual(4, masked["assigned"])
+        self.assertEqual("******", masked["sign"])
+        self.assertEqual("******", masked["userToken"])
 
 
 if __name__ == "__main__":  # pragma: no cover

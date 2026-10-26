@@ -1150,50 +1150,68 @@ export async function render(ctx) {
     }
     renderParameters();
 
+    // 顶部与底部两个「运行」入口共用同一套逻辑，避免两处行为漂移
+    const runButtons = [];
+
+    async function triggerRun() {
+      if (view.running) return;
+      if (!spec.id) {
+        toast('请先保存用例再运行', 'error');
+        return;
+      }
+      if (view.dirty) {
+        toast('请先保存用例修改再运行', 'error');
+        return;
+      }
+      let payload;
+      try { payload = { variables: runVariables(), timeout_s: workflowTimeoutSeconds(spec) }; } catch (err) {
+        toast(err.message, 'error');
+        return;
+      }
+      if (envSelect.value) payload.env_id = Number(envSelect.value);
+      view.running = true;
+      runButtons.forEach((button) => { button.disabled = true; });
+      envSelect.disabled = true;
+      parameterHost.disabled = true;
+      const stop = el('span', { class: 'loading-indicator' }, el('span', { class: 'spinner', 'aria-hidden': 'true' }), '执行中…');
+      resultHost.appendChild(stop);
+      const [ok, data] = await runAction(() => Api.runCase(pid, spec.id, payload));
+      view.running = false;
+      runButtons.forEach((button) => { button.disabled = false; });
+      envSelect.disabled = false;
+      parameterHost.disabled = false;
+      if (stop.parentNode) stop.parentNode.removeChild(stop);
+      if (!ok || ctx.signal.aborted || !view.current || view.current.id !== spec.id) return;
+      const result = (data && (data.result || data.case_result)) || data || {};
+      view.lastResult = result;
+      renderResult();
+    }
+
     const runButton = el(
       'button',
       {
         type: 'button',
         class: 'btn btn-primary',
-        on: {
-          click: async () => {
-            if (view.running) return;
-            if (!spec.id) {
-              toast('请先保存用例再运行', 'error');
-              return;
-            }
-            if (view.dirty) {
-              toast('请先保存用例修改再运行', 'error');
-              return;
-            }
-            let payload;
-            try { payload = { variables: runVariables(), timeout_s: workflowTimeoutSeconds(spec) }; } catch (err) {
-              toast(err.message, 'error');
-              return;
-            }
-            if (envSelect.value) payload.env_id = Number(envSelect.value);
-            view.running = true;
-            runButton.disabled = true;
-            envSelect.disabled = true;
-            parameterHost.disabled = true;
-            const stop = el('span', { class: 'loading-indicator' }, el('span', { class: 'spinner', 'aria-hidden': 'true' }), '执行中…');
-            resultHost.appendChild(stop);
-            const [ok, data] = await runAction(() => Api.runCase(pid, spec.id, payload));
-            view.running = false;
-            runButton.disabled = false;
-            envSelect.disabled = false;
-            parameterHost.disabled = false;
-            if (stop.parentNode) stop.parentNode.removeChild(stop);
-            if (!ok || ctx.signal.aborted || !view.current || view.current.id !== spec.id) return;
-            const result = (data && (data.result || data.case_result)) || data || {};
-            view.lastResult = result;
-            renderResult();
-          },
-        },
+        on: { click: triggerRun },
       },
       icon('i-play'),
       '运行此用例'
     );
+    runButtons.push(runButton);
+
+    // 顶部快捷入口：放在「复制」左边，长表单不用滚到底部才能运行
+    const topRunButton = el(
+      'button',
+      {
+        type: 'button',
+        class: 'btn btn-sm',
+        title: '使用下方运行参数执行本用例',
+        on: { click: triggerRun },
+      },
+      icon('i-play', 'icon-sm'),
+      '运行'
+    );
+    runButtons.push(topRunButton);
 
     const resultHost = el('div', { class: 'stack' });
 
@@ -1379,6 +1397,7 @@ export async function render(ctx) {
       el('h2', { text: isNew ? '新建用例' : '编辑用例 ' + (spec.id ? '#' + spec.id : '') }),
       dirtyBadge,
       el('div', { class: 'spacer' }),
+      isNew ? null : topRunButton,
       isNew
         ? null
         : el(

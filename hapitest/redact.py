@@ -31,9 +31,12 @@ SENSITIVE_KEYWORDS = (
     "session",
     "credential",
     "signature",
-    "sign",
     "salt",
 )
+
+#: ``sign`` 是短词，按子串匹配会把 assigned / designed / resigned 这类正常字段
+#: （例如官方库统计里的 ``assigned`` 计数）误判成敏感字段，因此单独用前缀排除。
+_SENSITIVE_SIGN_RE = re.compile(r"(?<!as)(?<!de)(?<!re)sign", re.IGNORECASE)
 
 # 这些 header 名称即使不含关键字也必须脱敏
 SENSITIVE_HEADERS = (
@@ -52,7 +55,8 @@ def is_secret_key(key: Optional[str]) -> bool:
     """字段名或变量名是否敏感。"""
     if not key:
         return False
-    return bool(_SENSITIVE_RE.search(str(key)))
+    text = str(key)
+    return bool(_SENSITIVE_RE.search(text) or _SENSITIVE_SIGN_RE.search(text))
 
 
 def is_secret_header(name: Optional[str]) -> bool:

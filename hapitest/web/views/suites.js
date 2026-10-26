@@ -22,6 +22,7 @@ import {
   toast,
   totalOf,
 } from '../app.js';
+import { workflowParameters } from '../workflow.js';
 
 const CASE_PAGE_SIZE = 500;
 
@@ -29,9 +30,11 @@ function emptySuite() {
   return {
     id: null,
     name: '',
+    folder: '',
     description: '',
     case_ids: [],
     env_id: null,
+    variables: {},
     failure_strategy: 'continue',
     concurrency: 1,
     tags: [],
@@ -48,6 +51,8 @@ export async function render(ctx) {
     current: null,
     dirty: false,
     search: '',
+    folder: '',
+    folders: [],
   };
 
   const main = ctx.container;
@@ -66,15 +71,77 @@ export async function render(ctx) {
     )
   );
 
-  const listHost = el('div', { class: 'picker' });
+  const folderFilter = selectControl(
+    [
+      { value: '', label: '全部目录' },
+      { value: '__none__', label: '未分组' },
+    ],
+    {
+      id: 'suite-filter-folder',
+      on: {
+        change: (event) => {
+          view.folder = event.target.value;
+          renderList();
+        },
+      },
+    }
+  );
+  const listHost = el('div', { class: 'picker suite-picker' });
   const listCard = el(
     'section',
     { class: 'card' },
     el('div', { class: 'card-head' }, el('h2', { text: '套件列表' }), el('span', { class: 'pill-count', id: 'suite-count' })),
+    el('div', { class: 'filter-bar' }, formField('目录', folderFilter, { id: 'suite-filter-folder' }), el('div', { class: 'spacer' })),
     listHost
   );
   const editorHost = el('section', { class: 'card' });
   main.appendChild(el('div', { class: 'split' }, listCard, editorHost));
+
+  function matchesFolder(folder) {
+    if (!view.folder) return true;
+    if (view.folder === '__none__') return !folder;
+    return folder === view.folder;
+  }
+
+  function groupSuites() {
+    const groups = new Map();
+    view.suites.forEach((suite) => {
+      const name = String(suite.folder || '').trim();
+      if (!matchesFolder(name)) return;
+      if (!groups.has(name)) groups.set(name, []);
+      groups.get(name).push(suite);
+    });
+    // 有目录的按名称排在前面，「未分组」永远收在最后
+    return Array.from(groups.entries()).sort((a, b) => {
+      if (!a[0]) return 1;
+      if (!b[0]) return -1;
+      return a[0].localeCompare(b[0], 'zh-Hans-CN');
+    });
+  }
+
+  function folderNames() {
+    const names = new Set(view.folders || []);
+    view.suites.forEach((suite) => {
+      const name = String(suite.folder || '').trim();
+      if (name) names.add(name);
+    });
+    return Array.from(names).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+  }
+
+  async function loadFolders() {
+    try {
+      const data = await Api.listFolders(pid, { signal: ctx.signal });
+      const payload = (data && data.folders) || data || {};
+      view.folders = Array.isArray(payload.suite_folders) ? payload.suite_folders.slice() : [];
+    } catch (err) {
+      view.folders = [];
+    }
+    clear(folderFilter);
+    folderFilter.appendChild(el('option', { value: '', text: '全部目录' }));
+    folderFilter.appendChild(el('option', { value: '__none__', text: '未分组' }));
+    view.folders.forEach((name) => folderFilter.appendChild(el('option', { value: name, text: name })));
+    folderFilter.value = view.folder;
+  }
 
   function renderList() {
     clear(listHost);
@@ -84,32 +151,49 @@ export async function render(ctx) {
       listHost.appendChild(emptyBlock('还没有套件', '点击「新建套件」把常用用例组织成一次可复用的运行。'));
       return;
     }
-    const list = el('ul', { class: 'picker-list' });
-    view.suites.forEach((suite) => {
-      const current = view.current && view.current.id === suite.id;
-      const button = el(
-        'button',
-        {
-          type: 'button',
-          class: 'link-btn',
-          style: { textAlign: 'left', width: '100%' },
-          'aria-current': current ? 'true' : null,
-          on: { click: () => openSuiteFromList(suite) },
-        },
-        el('span', { text: suite.name || '(未命名套件)' }),
+    if (!groupSuites().length) {
+      listHost.appendChild(emptyBlock('该目录下没有套件', '切换到「全部目录」，或给套件设置这个目录。'));
+      return;
+    }
+    groupSuites().forEach(([folder, suites]) => {
+      const group = el('section', { class: 'suite-group' });
+      group.appendChild(
         el(
-          'span',
-          { class: 'row tight' },
-          el('span', { class: 'chip', text: (suite.case_ids || []).length + ' 条用例' }),
-          suite.failure_strategy === 'stop' ? el('span', { class: 'chip chip-incomplete', text: '失败即停' }) : null,
-          suite.concurrency > 1 ? el('span', { class: 'chip', text: '并发 ' + suite.concurrency }) : null
+          'div',
+          { class: 'suite-group-head' },
+          el('span', { class: 'suite-group-name', text: folder || '未分组' }),
+          el('span', { class: 'pill-count', text: String(suites.length) })
         )
       );
-      const li = el('li', {}, button);
-      if (current) li.setAttribute('aria-selected', 'true');
-      list.appendChild(li);
+      const list = el('ul', { class: 'picker-list' });
+      suites.forEach((suite) => {
+        const current = view.current && view.current.id === suite.id;
+        const button = el(
+          'button',
+          {
+            type: 'button',
+            class: 'link-btn',
+            style: { textAlign: 'left', width: '100%' },
+            'aria-current': current ? 'true' : null,
+            on: { click: () => openSuiteFromList(suite) },
+          },
+          el('span', { text: suite.name || '(未命名套件)' }),
+          el(
+            'span',
+            { class: 'row tight' },
+            el('span', { class: 'chip', text: (suite.case_ids || []).length + ' 条用例' }),
+            suite.folder ? el('span', { class: 'chip chip-queued', text: '目录 ' + suite.folder }) : null,
+            suite.failure_strategy === 'stop' ? el('span', { class: 'chip chip-incomplete', text: '失败即停' }) : null,
+            suite.concurrency > 1 ? el('span', { class: 'chip', text: '并发 ' + suite.concurrency }) : null
+          )
+        );
+        const li = el('li', {}, button);
+        if (current) li.setAttribute('aria-selected', 'true');
+        list.appendChild(li);
+      });
+      group.appendChild(list);
+      listHost.appendChild(group);
     });
-    listHost.appendChild(list);
   }
 
   async function loadSuites() {
@@ -212,6 +296,50 @@ export async function render(ctx) {
         },
       },
     });
+    // 目录从已有目录里选；没有合适的再「新建目录…」手填
+    const knownFolders = folderNames();
+    const isCustomFolder = Boolean(spec.folder) && !knownFolders.includes(spec.folder);
+    const folderCustomInput = textControl({
+      id: 'suite-folder-custom',
+      value: isCustomFolder ? spec.folder : '',
+      placeholder: '输入新目录名，例如：官方靓号库/回归',
+      on: {
+        input: (event) => {
+          spec.folder = event.target.value;
+          markDirty();
+        },
+      },
+    });
+    folderCustomInput.hidden = !isCustomFolder;
+    const folderSelect = selectControl(
+      [{ value: '', label: '未分组' }]
+        .concat(knownFolders.map((name) => ({ value: name, label: name })))
+        .concat([{ value: '__new__', label: '＋ 新建目录…' }]),
+      {
+        id: 'suite-folder',
+        value: isCustomFolder ? '__new__' : (knownFolders.includes(spec.folder) ? spec.folder : ''),
+        on: {
+          change: (event) => {
+            const value = event.target.value;
+            if (value === '__new__') {
+              folderCustomInput.hidden = false;
+              folderCustomInput.focus();
+              spec.folder = folderCustomInput.value.trim();
+            } else {
+              folderCustomInput.hidden = true;
+              spec.folder = value;
+            }
+            markDirty();
+          },
+        },
+      }
+    );
+    const folderField = el(
+      'div',
+      { class: 'suite-folder-field' },
+      formField('目录 folder', folderSelect, { id: 'suite-folder', hint: '选已有目录，或「新建目录…」' }),
+      folderCustomInput
+    );
     const descriptionArea = textareaControl({
       id: 'suite-description',
       rows: 3,
@@ -298,6 +426,51 @@ export async function render(ctx) {
     const pickerBox = el('div', { class: 'picker' }, pickerListHost);
     const orderHost = el('div');
     const orderCount = el('span', { class: 'pill-count' });
+    const suiteVarsHost = el('div', { class: 'stack' });
+
+    // 已选用例引用到的 ${变量}：在套件里直接填，运行时优先于环境变量
+    function renderSuiteVariables() {
+      clear(suiteVarsHost);
+      const seen = new Map();
+      spec.case_ids.forEach((id) => {
+        const item = view.caseMap[String(id)];
+        if (!item) return;
+        workflowParameters(item).forEach((param) => {
+          if (!seen.has(param.name)) seen.set(param.name, { param, cases: [] });
+          seen.get(param.name).cases.push(item.name || '#' + id);
+        });
+      });
+      if (!seen.size) {
+        suiteVarsHost.appendChild(
+          el('div', { class: 'field-hint', text: '所选用例没有引用 ${变量}，不需要额外参数。' })
+        );
+        return;
+      }
+      suiteVarsHost.appendChild(
+        el('div', { class: 'field-hint', text: '这里填的值只在本套件运行时生效，优先于环境变量；留空则使用环境里的同名变量。' })
+      );
+      const grid = el('div', { class: 'grid-2' });
+      seen.forEach(({ param, cases }, name) => {
+        const value = spec.variables && spec.variables[name] !== undefined ? spec.variables[name] : '';
+        const input = textControl({
+          id: 'suite-var-' + name,
+          value: String(value),
+          type: param.secret ? 'password' : 'text',
+          placeholder: param.secret ? '留空使用环境变量' : '',
+          on: {
+            input: (event) => {
+              if (!spec.variables) spec.variables = {};
+              spec.variables[name] = event.target.value;
+              markDirty();
+            },
+          },
+        });
+        const field = formField(name + (param.required ? ' *' : '（选填）'), input, { id: 'suite-var-' + name });
+        field.appendChild(el('span', { class: 'field-hint', text: '用于：' + cases.join('、') }));
+        grid.appendChild(field);
+      });
+      suiteVarsHost.appendChild(grid);
+    }
 
     function filteredCases() {
       const keyword = view.search.toLowerCase();
@@ -317,15 +490,19 @@ export async function render(ctx) {
       if (checked && index === -1) spec.case_ids.push(id);
       if (!checked && index >= 0) spec.case_ids.splice(index, 1);
       markDirty();
+      // 勾选状态浏览器已经更新，这里只刷新「已选用例」，不重建候选列表——
+      // 重建会把滚动位置带回第一行，勾到一半就得重新找位置。
       renderOrderList();
-      renderPickerList();
     }
 
-    function renderPickerList() {
+    function renderPickerList(preserveScroll = false) {
+      // 只在「删除已选用例」这类列表结构不变的操作里保留滚动位置；搜索时回到顶部
+      const scrollTop = preserveScroll ? pickerBox.scrollTop : 0;
       clear(pickerListHost);
       const list = filteredCases();
       if (!list.length) {
         pickerListHost.appendChild(el('li', {}, el('span', { class: 'muted', text: '没有匹配的用例' })));
+        pickerBox.scrollTop = scrollTop;
         return;
       }
       list.forEach((item) => {
@@ -354,6 +531,7 @@ export async function render(ctx) {
           )
         );
       });
+      pickerBox.scrollTop = scrollTop;
     }
 
     function moveCase(index, delta) {
@@ -368,6 +546,7 @@ export async function render(ctx) {
 
     function renderOrderList() {
       clear(orderHost);
+      renderSuiteVariables();
       orderCount.textContent = spec.case_ids.length + ' 条';
       if (!spec.case_ids.length) {
         orderHost.appendChild(el('div', { class: 'field-hint', text: '尚未选择用例：套件至少需要一条用例才能运行。' }));
@@ -403,7 +582,7 @@ export async function render(ctx) {
                   spec.case_ids.splice(index, 1);
                   markDirty();
                   renderOrderList();
-                  renderPickerList();
+                  renderPickerList(true);
                 },
               },
             }, icon('i-trash', 'icon-sm'))
@@ -422,9 +601,11 @@ export async function render(ctx) {
       if (!name) throw new Error('套件名称不能为空');
       return {
         name,
+        folder: folderSelect.value === '__new__' ? folderCustomInput.value.trim() : folderSelect.value,
         description: descriptionArea.value,
         case_ids: spec.case_ids.slice(),
         env_id: spec.env_id === null || spec.env_id === undefined ? null : Number(spec.env_id),
+        variables: Object.assign({}, spec.variables || {}),
         failure_strategy: strategySelect.value,
         concurrency: Math.max(1, Number(concurrencyInput.value || 1)),
         tags: tagsInput.value
@@ -552,9 +733,14 @@ export async function render(ctx) {
           'div',
           { class: 'grid-2' },
           formField('套件名称 *', nameInput, { id: 'suite-name' }),
-          formField('标签 tags', tagsInput, { id: 'suite-tags' })
+          folderField
         ),
-        formField('描述 description', descriptionArea, { id: 'suite-description' }),
+        el(
+          'div',
+          { class: 'grid-2' },
+          formField('标签 tags', tagsInput, { id: 'suite-tags' }),
+          formField('描述 description', descriptionArea, { id: 'suite-description' })
+        ),
         el(
           'div',
           { class: 'grid-3' },
@@ -569,10 +755,21 @@ export async function render(ctx) {
           el(
             'div',
             { class: 'stack' },
-            formField('搜索用例', searchInput, { id: 'suite-case-search', hint: '共 ' + view.cases.length + ' 条候选用例' }),
-            pickerBox,
             el('div', { class: 'subform-title' }, '已选用例（按执行顺序）'),
-            orderHost
+            orderHost,
+            el('div', { class: 'subform-title' }, '运行参数（套件级）'),
+            suiteVarsHost,
+            el(
+              'details',
+              { class: 'case-picker-details' },
+              el('summary', {}, '选择用例（展开后勾选，共 ' + view.cases.length + ' 条候选）'),
+              el(
+                'div',
+                { class: 'stack' },
+                formField('搜索用例', searchInput, { id: 'suite-case-search' }),
+                pickerBox
+              )
+            )
           )
         )
       )
@@ -580,10 +777,12 @@ export async function render(ctx) {
 
     renderPickerList();
     renderOrderList();
+    renderSuiteVariables();
   }
 
   await loadEnvironments();
   await loadCases();
+  await loadFolders();
   await loadSuites();
   renderEditor();
 }

@@ -73,6 +73,65 @@ class RunnerStatusTest(unittest.TestCase):
         self.assertEqual(result.response["status"], 200)
         self.assertEqual(result.request["method"], "GET")
 
+    def test_execution_log_records_request_response_and_result(self) -> None:
+        """执行日志必须能回答"跑了什么、回了什么、结果如何"。"""
+        run, result = self._run_case(
+            CaseSpec(
+                name="执行日志",
+                request=RequestSpec(method="GET", path="/ok"),
+                assertions=[AssertionSpec(type="status_code", operator="eq", expected=200)],
+            )
+        )
+        logs = "\n".join(result.logs)
+        self.assertIn("开始执行用例", logs)
+        self.assertIn("/ok", logs)
+        self.assertIn("← HTTP 200", logs)
+        self.assertIn("断言 1/1", logs)
+        self.assertIn("结果：通过", logs)
+        # 运行级日志也要能看出跑了哪条用例
+        self.assertTrue(any("执行日志" in line and "通过" in line for line in run.logs), run.logs)
+
+    def test_execution_log_marks_failed_assertion(self) -> None:
+        _, result = self._run_case(
+            CaseSpec(
+                name="日志断言失败",
+                request=RequestSpec(method="GET", path="/ok"),
+                assertions=[AssertionSpec(type="json_path", operator="eq", path="$.code", expected=999)],
+            )
+        )
+        logs = "\n".join(result.logs)
+        self.assertIn("✗ 断言 1/1", logs)
+        self.assertIn("结果：失败", logs)
+
+    def test_execution_log_masks_secret_header(self) -> None:
+        _, result = self._run_case(
+            CaseSpec(
+                name="日志脱敏",
+                request=RequestSpec(
+                    method="GET",
+                    path="/echo",
+                    headers=[KeyValue(name="X-Token", value="real-secret")],
+                ),
+                assertions=[AssertionSpec(type="status_code", operator="eq", expected=200)],
+            )
+        )
+        logs = "\n".join(result.logs)
+        self.assertIn("X-Token=******", logs)
+        self.assertNotIn("real-secret", logs)
+
+    def test_execution_log_for_incomplete_case(self) -> None:
+        """缺条件的用例也要说明原因，不能只有一句 error。"""
+        case = CaseSpec(name="没有断言", request=RequestSpec(method="GET", path="/ok"), assertions=[])
+        saved = self.repo.create_case(case)
+        run = self.manager.run_sync(
+            RunRequest(project_id=self.record.id, case_ids=[saved.id], env_id=self.environment.id, trigger="api")
+        )
+        result = run.case_results[0]
+        logs = "\n".join(result.logs)
+        self.assertEqual(result.status, "incomplete")
+        self.assertIn("未定义任何断言", logs)
+        self.assertIn("结果：未完成", logs)
+
     def test_failed_assertion(self) -> None:
         run, result = self._run_case(
             CaseSpec(
